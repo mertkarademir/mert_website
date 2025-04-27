@@ -1,0 +1,10 @@
+{
+  "files": {
+    "main.js": "/mert_website/static/js/main.d4e38290.js",
+    "index.html": "/mert_website/index.html",
+    "main.d4e38290.js.map": "/mert_website/static/js/main.d4e38290.js.map"
+  },
+  "entrypoints": [
+    "static/js/main.d4e38290.js"
+  ]
+}
