@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
-const sqlite3 = require('sqlite3').verbose();
+const Database = require('better-sqlite3');
 const cors = require('cors');
 const fs = require('fs');
 const app = express();
@@ -20,19 +20,15 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // Initialize SQLite database
-const db = new sqlite3.Database('photos.db', (err) => {
-  if (err) {
-    console.error('Error opening database:', err);
-  } else {
-    console.log('Connected to SQLite database.');
-    db.run(`CREATE TABLE IF NOT EXISTS photos (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      filename TEXT,
-      category TEXT,
-      caption TEXT
-    )`);
-  }
-});
+const db = new Database('photos.db');
+db.exec(`
+  CREATE TABLE IF NOT EXISTS photos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT,
+    category TEXT,
+    caption TEXT
+  )
+`);
 
 // Middleware
 app.use(express.json());
@@ -43,40 +39,42 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.post('/api/upload', upload.single('photo'), (req, res) => {
   const { category, caption } = req.body;
   const filename = req.file.filename;
-  db.run('INSERT INTO photos (filename, category, caption) VALUES (?, ?, ?)', [filename, category, caption], (err) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
+  const stmt = db.prepare('INSERT INTO photos (filename, category, caption) VALUES (?, ?, ?)');
+  try {
+    stmt.run(filename, category, caption);
     res.json({ message: 'Photo uploaded successfully', filename });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/photos', (req, res) => {
-  db.all('SELECT * FROM photos', [], (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    res.json(rows);
-  });
+  try {
+    const photos = db.prepare('SELECT * FROM photos').all();
+    res.json(photos);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.delete('/api/photos/:id', (req, res) => {
   const photoId = req.params.id;
-  db.get('SELECT filename FROM photos WHERE id = ?', [photoId], (err, row) => {
-    if (err || !row) {
+  try {
+    const photo = db.prepare('SELECT filename FROM photos WHERE id = ?').get(photoId);
+    if (!photo) {
       return res.status(404).json({ error: 'Photo not found' });
     }
-    const filePath = path.join(__dirname, 'uploads', row.filename);
+    
+    const filePath = path.join(__dirname, 'uploads', photo.filename);
     fs.unlink(filePath, (fsErr) => {
       // Ignore file not found error, continue to delete DB record
-      db.run('DELETE FROM photos WHERE id = ?', [photoId], (dbErr) => {
-        if (dbErr) {
-          return res.status(500).json({ error: dbErr.message });
-        }
-        res.json({ message: 'Photo deleted successfully' });
-      });
+      const stmt = db.prepare('DELETE FROM photos WHERE id = ?');
+      stmt.run(photoId);
+      res.json({ message: 'Photo deleted successfully' });
     });
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Serve React app
