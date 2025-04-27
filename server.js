@@ -1,87 +1,101 @@
 const express = require('express');
-const multer = require('multer');
-const path = require('path');
-const Database = require('better-sqlite3');
 const cors = require('cors');
+const multer = require('multer');
+const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
 const fs = require('fs');
+
 const app = express();
-app.use(cors());
-const PORT = process.env.PORT || 5000;
+const port = process.env.PORT || 5000;
+
+// Initialize SQLite database
+const db = new sqlite3.Database('photos.db', (err) => {
+  if (err) {
+    console.error('Error opening database:', err);
+  } else {
+    console.log('Connected to SQLite database');
+    db.run(`
+      CREATE TABLE IF NOT EXISTS photos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        filename TEXT,
+        category TEXT,
+        caption TEXT,
+        uploadDate DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+  }
+});
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/');
+    const uploadDir = 'uploads';
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir);
+    }
+    cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname));
+    cb(null, Date.now() + '-' + file.originalname);
   }
 });
-const upload = multer({ storage });
 
-// Initialize SQLite database
-const db = new Database('photos.db');
-db.exec(`
-  CREATE TABLE IF NOT EXISTS photos (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    filename TEXT,
-    category TEXT,
-    caption TEXT
-  )
-`);
+const upload = multer({ storage: storage });
 
-// Middleware
+app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'client/build')));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static('uploads'));
 
-// Routes
+// Upload endpoint
 app.post('/api/upload', upload.single('photo'), (req, res) => {
   const { category, caption } = req.body;
   const filename = req.file.filename;
-  const stmt = db.prepare('INSERT INTO photos (filename, category, caption) VALUES (?, ?, ?)');
-  try {
-    stmt.run(filename, category, caption);
-    res.json({ message: 'Photo uploaded successfully', filename });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/photos', (req, res) => {
-  try {
-    const photos = db.prepare('SELECT * FROM photos').all();
-    res.json(photos);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/photos/:id', (req, res) => {
-  const photoId = req.params.id;
-  try {
-    const photo = db.prepare('SELECT filename FROM photos WHERE id = ?').get(photoId);
-    if (!photo) {
-      return res.status(404).json({ error: 'Photo not found' });
+  
+  db.run(
+    'INSERT INTO photos (filename, category, caption) VALUES (?, ?, ?)',
+    [filename, category, caption],
+    function(err) {
+      if (err) {
+        return res.status(500).json({ success: false, error: err.message });
+      }
+      res.json({ 
+        success: true, 
+        photo: {
+          id: this.lastID,
+          filename,
+          category,
+          caption
+        }
+      });
     }
-    
-    const filePath = path.join(__dirname, 'uploads', photo.filename);
-    fs.unlink(filePath, (fsErr) => {
-      // Ignore file not found error, continue to delete DB record
-      const stmt = db.prepare('DELETE FROM photos WHERE id = ?');
-      stmt.run(photoId);
-      res.json({ message: 'Photo deleted successfully' });
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  );
 });
 
-// Serve React app
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'client/build', 'index.html'));
+// Get all photos
+app.get('/api/photos', (req, res) => {
+  db.all('SELECT * FROM photos ORDER BY uploadDate DESC', [], (err, photos) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(photos);
+  });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// Get photos by category
+app.get('/api/photos/:category', (req, res) => {
+  db.all(
+    'SELECT * FROM photos WHERE category = ? ORDER BY uploadDate DESC',
+    [req.params.category],
+    (err, photos) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      res.json(photos);
+    }
+  );
+});
+
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+}); 
 }); 
